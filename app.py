@@ -27,6 +27,10 @@ class Handler(BaseHTTPRequestHandler):
                 uid=int(parse_qs(p.query).get("user_id",[0])[0]); return self._json(200,self.db.get_snapshot(int(parts[2]),int(parts[4]),uid))
             if len(parts)==4 and parts[:2]==["api","works"] and parts[3]=="collation":
                 uid=int(parse_qs(p.query).get("user_id",[0])[0]); return self._json(200,self.db.export_collation(int(parts[2]),uid))
+            if len(parts)==4 and parts[:2]==["api","works"] and parts[3]=="editions":
+                uid=int(parse_qs(p.query).get("user_id",[0])[0]); return self._json(200,self.db.list_editions(int(parts[2]),uid))
+            if len(parts)==3 and parts[:2]==["api","editions"]:
+                uid=int(parse_qs(p.query).get("user_id",[0])[0]); return self._json(200,self.db.get_edition(int(parts[2]),uid))
             self._json(404,{"ok":False,"error":"接口不存在"})
         except (DomainError,ValueError) as exc: self._json(400,{"ok":False,"error":str(exc)})
     def do_POST(self):
@@ -38,6 +42,7 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts)==4 and parts[:2]==["api","works"] and parts[3]=="witnesses": return self._json(201,{"ok":True,"id":self.db.add_witness(int(parts[2]),str(b.get("siglum","")),str(b.get("kind","version")),str(b.get("source_note","")),str(b.get("missing_sections","")))})
             if len(parts)==4 and parts[:2]==["api","works"] and parts[3]=="passages": return self._json(201,{"ok":True,"id":self.db.add_passage(int(parts[2]),str(b.get("label","")),str(b.get("base_text","")),int(b.get("user_id",0)))})
             if len(parts)==4 and parts[:2]==["api","works"] and parts[3]=="access": self.db.grant_work_access(int(parts[2]),int(b.get("user_id",0)),str(b.get("permission","view")),int(b.get("granted_by",0))); return self._json(201,{"ok":True})
+            if len(parts)==4 and parts[:2]==["api","works"] and parts[3]=="editions": return self._json(201,{"ok":True,"edition":self.db.publish_edition(int(parts[2]),str(b.get("note","")),int(b.get("user_id",0)))})
             if len(parts)==4 and parts[:2]==["api","witnesses"] and parts[3]=="editors": self.db.grant_witness_editor(int(parts[2]),int(b.get("user_id",0)),int(b.get("granted_by",0))); return self._json(201,{"ok":True})
             if path=="/api/alignments": return self._json(201,{"ok":True,"id":self.db.align_passage(int(b.get("passage_id",0)),int(b.get("witness_id",0)),str(b.get("aligned_text","")),int(b.get("sort_order",0)),int(b.get("user_id",0)))})
             if path=="/api/variants": return self._json(201,{"ok":True,"id":self.db.create_variant(int(b.get("passage_id",0)),int(b.get("witness_id",0)),str(b.get("proposed_text","")),str(b.get("reason","")),int(b.get("user_id",0)),int(b.get("expected_revision",0)))})

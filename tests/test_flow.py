@@ -36,5 +36,55 @@ class CollationFlowTest(unittest.TestCase):
             self.db.export_collation(self.work,self.outsider)
         with self.assertRaisesRegex(DomainError,"括号"):
             self.db.align_passage(self.passage,self.w1,"文本[未闭合",9,self.owner)
+    def test_edition_publish_freezes_counts_and_keeps_history_readonly(self):
+        variant=self.db.create_variant(self.passage,self.w2,"春水东流，故人南去。","按语义补足",self.editor,0)
+        self.db.add_note(variant,"补字参照纸背墨迹",self.editor)
+        first=self.db.publish_edition(self.work,"评审会首轮交付",self.owner)
+        self.assertEqual(1,first["version_no"])
+        self.assertEqual(2,first["alignment_count"])
+        self.assertEqual(1,first["variant_count"])
+        self.assertEqual(1,first["note_count"])
+        self.assertEqual(1,first["gap_count"])
+        self.assertEqual({str(self.passage):1},first["revision_heads"])
+        # 历史定本只读：定稿后再改草稿，旧定本内容保持不变
+        self.db.update_variant(variant,"春水东流，[不可辨]人南去。","墨迹受损不再补写",self.editor,1)
+        old=self.db.get_edition(first["id"],self.reviewer)
+        self.assertTrue(old["readonly"])
+        self.assertEqual("春水东流，故人南去。",old["collation"]["passages"][0]["variants"][0]["proposed_text"])
+        listing=self.db.list_editions(self.work,self.reviewer)
+        self.assertEqual(1,len(listing["editions"]))
+        self.assertTrue(listing["has_draft_changes"])
+        self.assertEqual(1,len(listing["draft_revisions"]))
+        kinds=[(item["kind"],item.get("is_draft")) for item in listing["timeline"]]
+        self.assertEqual([("revision",False),("edition",None),("revision",True)],kinds)
+        # 基于更新后的修订发布 v2，异文数随草稿更新；缺口仍来自含[缺页]的对齐
+        second=self.db.publish_edition(self.work,"评审会第二轮定稿",self.owner)
+        self.assertEqual(2,second["version_no"])
+        self.assertEqual(1,second["gap_count"])
+        second_view=self.db.get_edition(second["id"],self.owner)
+        self.assertEqual("春水东流，[不可辨]人南去。",second_view["collation"]["passages"][0]["variants"][0]["proposed_text"])
+        # 时间线：v1冻结修订1 → v1 → v2冻结修订2 → v2，无遗留草稿
+        tl=self.db.list_editions(self.work,self.owner)["timeline"]
+        self.assertEqual([("revision",False),("edition",None),("revision",False),("edition",None)],
+                         [(i["kind"],i.get("is_draft")) for i in tl])
+        self.assertFalse(self.db.list_editions(self.work,self.owner)["has_draft_changes"])
+        # 旧定本仍可回看，且仍是发布当时的内容
+        old_again=self.db.get_edition(first["id"],self.owner)
+        self.assertEqual(1,old_again["collation"]["gap_count"])
+        self.assertEqual(2,self.db.list_editions(self.work,self.owner)["editions"][1]["version_no"])
+    def test_edition_requires_owner_and_new_revisions(self):
+        first=self.db.publish_edition(self.work,"首轮",self.owner)
+        with self.assertRaisesRegex(DomainError,"新修订"):
+            self.db.publish_edition(self.work,"没有新修订也发",self.owner)
+        with self.assertRaisesRegex(DomainError,"负责人"):
+            self.db.publish_edition(self.work,"编辑越权发布",self.editor)
+        with self.assertRaisesRegex(DomainError,"无权"):
+            self.db.list_editions(self.work,self.outsider)
+        with self.assertRaisesRegex(DomainError,"无权"):
+            self.db.get_edition(first["id"],self.outsider)
+        # 有了新修订后允许发布 v2
+        vid=self.db.create_variant(self.passage,self.w2,"另一处补足","理由足够长",self.editor,0)
+        self.assertIsInstance(vid,int)
+        self.assertEqual(2,self.db.publish_edition(self.work,"二轮",self.owner)["version_no"])
 
 if __name__=="__main__": unittest.main()
