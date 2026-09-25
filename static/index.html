@@ -1,1 +1,55 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>数字人文文本校勘</title><style>body{font:15px system-ui;max-width:1100px;margin:24px auto;padding:0 16px;background:#f7f5ef}section{background:#fff;padding:16px;margin:12px 0;border:1px solid #d6d0c4;border-radius:10px}input,textarea,select,button{padding:7px;margin:3px;border:1px solid #aaa;border-radius:6px}button{background:#5b3d22;color:#fff}pre{white-space:pre-wrap;max-height:400px;overflow:auto}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.grid input,.grid textarea{width:90%}</style><h1>数字人文文本校勘</h1><section><button onclick="state()">刷新状态</button><pre id="state"></pre></section><section><h2>段落与版本对齐</h2><div class="grid"><input id="work" type="number" placeholder="作品 ID"><input id="passage" type="number" placeholder="段落 ID"><input id="witness" type="number" placeholder="版本 ID"><input id="user" type="number" placeholder="用户 ID"><input id="order" type="number" value="1"><textarea id="text" placeholder="对齐文本">春水东流，[缺页]</textarea></div><button onclick="align()">保存对齐</button><pre id="result"></pre></section><section><h2>异文多层修订</h2><input id="variant" type="number" placeholder="异文 ID"><input id="revision" type="number" value="0" placeholder="当前修订"><input id="reason" placeholder="取舍理由"><textarea id="proposed" placeholder="拟订文本"></textarea><button onclick="variant()">新增异文</button><button onclick="revise()">提交新层</button><button onclick="snapshot()">查看快照</button><button onclick="lock()">锁定段落</button><pre id="extra"></pre></section><script>const show=(e,x)=>document.querySelector(e).textContent=JSON.stringify(x,null,2);async function get(u,e='#result'){show(e,await(await fetch(u)).json())}async function post(u,b,e='#result'){show(e,await(await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)})).json())}async function state(){show('#state',await(await fetch('/api/state')).json())}function align(){post('/api/alignments',{passage_id:+passage.value,witness_id:+witness.value,aligned_text:text.value,sort_order:+order.value,user_id:+user.value})}function variant(){post('/api/variants',{passage_id:+passage.value,witness_id:+witness.value,proposed_text:proposed.value,reason:reason.value,user_id:+user.value,expected_revision:+revision.value})}function revise(){post('/api/variants/'+variant.value+'/revisions',{proposed_text:proposed.value,reason:reason.value,user_id:+user.value,expected_revision:+revision.value},'#extra')}function snapshot(){get('/api/passages/'+passage.value+'/snapshots/'+revision.value+'?user_id='+user.value,'#extra')}function lock(){post('/api/passages/'+passage.value+'/lock',{user_id:+user.value,reason:'版本已定稿'},'#extra')}state()</script></html>
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>数字人文文本校勘</title><style>body{font:15px system-ui;max-width:1100px;margin:24px auto;padding:0 16px;background:#f7f5ef}section{background:#fff;padding:16px;margin:12px 0;border:1px solid #d6d0c4;border-radius:10px}input,textarea,select,button{padding:7px;margin:3px;border:1px solid #aaa;border-radius:6px}button{background:#5b3d22;color:#fff}pre{white-space:pre-wrap;max-height:400px;overflow:auto}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.grid input,.grid textarea{width:90%}.final{background:#f3eee2;border-color:#c3b18c}.chip{display:inline-block;background:#5b3d22;color:#fff;border-radius:20px;padding:3px 12px;margin:3px;font-size:13px;cursor:pointer}.chip.draft{background:#8a8a8a;cursor:default}.arrow{color:#8a7a5d;margin:0 4px}.newtag{color:#a33a1c;font-size:13px}.muted{color:#777;font-size:13px}.eline{border-bottom:1px dashed #d6d0c4;padding:6px 2px}.badge{display:inline-block;background:#c3b18c;color:#3a2a14;border-radius:4px;padding:0 6px;font-size:12px;margin-left:6px}</style><h1>数字人文文本校勘</h1><section><button onclick="state()">刷新状态</button><pre id="state"></pre></section><section><h2>段落与版本对齐</h2><div class="grid"><input id="work" type="number" placeholder="作品 ID"><input id="passage" type="number" placeholder="段落 ID"><input id="witness" type="number" placeholder="版本 ID"><input id="user" type="number" placeholder="用户 ID"><input id="order" type="number" value="1"><textarea id="text" placeholder="对齐文本">春水东流，[缺页]</textarea></div><button onclick="align()">保存对齐</button><pre id="result"></pre></section><section><h2>异文多层修订</h2><input id="variant" type="number" placeholder="异文 ID"><input id="revision" type="number" value="0" placeholder="当前修订"><input id="reason" placeholder="取舍理由"><textarea id="proposed" placeholder="拟订文本"></textarea><button onclick="variant()">新增异文</button><button onclick="revise()">提交新层</button><button onclick="snapshot()">查看快照</button><button onclick="lock()">锁定段落</button><pre id="extra"></pre></section><section class="final"><h2>定本发布<span class="badge">历史定本只读</span></h2><p class="muted">负责人把当前各段落修订冻结为定本：自动顺延版本号，记录说明与当时的对齐、异文、注释、缺口数量。没有新修订时不能重复发布。</p><div class="grid"><input id="ever" type="number" placeholder="版本号（留空自动顺延）"><input id="edno" type="number" placeholder="要查看的定本号"><input id="edesc" placeholder="版本说明，如：评审会定稿"></div><button onclick="publishEdition()">发布定本</button><button onclick="editions()">定本列表与时间线</button><button onclick="editionDetail()">查看该定本</button><button onclick="draftExport()">查看当前草稿导出</button><div id="editions"></div><pre id="editionJson"></pre></section><script>
+const show=(e,x)=>document.querySelector(e).textContent=JSON.stringify(x,null,2);
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function get(u,e){let r=await(await fetch(u)).json();if(e)show(e,r);return r}
+async function post(u,b,e){let r=await(await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)})).json();if(e)show(e,r);return r}
+async function state(){show('#state',await(await fetch('/api/state')).json())}
+function align(){post('/api/alignments',{passage_id:+passage.value,witness_id:+witness.value,aligned_text:text.value,sort_order:+order.value,user_id:+user.value},'#result')}
+function variant(){post('/api/variants',{passage_id:+passage.value,witness_id:+witness.value,proposed_text:proposed.value,reason:reason.value,user_id:+user.value,expected_revision:+revision.value},'#result')}
+function revise(){post('/api/variants/'+variant.value+'/revisions',{proposed_text:proposed.value,reason:reason.value,user_id:+user.value,expected_revision:+revision.value},'#extra')}
+function snapshot(){get('/api/passages/'+passage.value+'/snapshots/'+revision.value+'?user_id='+user.value,'#extra')}
+function lock(){post('/api/passages/'+passage.value+'/lock',{user_id:+user.value,reason:'版本已定稿'},'#extra')}
+async function publishEdition(){
+  const r=await post('/api/works/'+work.value+'/editions',{version_no:ever.value,description:edesc.value,user_id:+user.value},'#editionJson');
+  if(r.ok){ever.value='';edesc.value='';editions()}
+}
+function editionDetail(){if(!edno.value){return}get('/api/works/'+work.value+'/editions/'+edno.value+'?user_id='+user.value,'#editionJson')}
+function draftExport(){get('/api/works/'+work.value+'/collation?user_id='+user.value,'#editionJson')}
+async function editions(){
+  const wid=work.value;
+  const [list,st]=await Promise.all([
+    fetch('/api/works/'+wid+'/editions?user_id='+user.value).then(r=>r.json()),
+    fetch('/api/state').then(r=>r.json())
+  ]);
+  const box=document.querySelector('#editions');
+  if(list.error||!list.editions){box.textContent=list.error||'暂无数据';return}
+  let html='<div><strong>定本序列（按发布先后，只读）：</strong><br>';
+  if(!list.editions.length) html+='<span class="muted">尚未发布过定本</span>';
+  list.editions.forEach(e=>{
+    html+='<span class="chip" title="查看第'+e.version_no+'版" onclick="edno.value='+e.version_no+';editionDetail()">第'+e.version_no+'版</span>'+
+      '<span class="muted"> '+esc(e.published_at)+' · '+esc(e.published_by_name)+' · 对齐 '+e.alignment_count+' / 异文 '+e.variant_count+' / 注释 '+e.note_count+' / 缺口 '+e.gap_count+(e.description?' · '+esc(e.description):'')+'</span><br>'
+  });
+  html+='<span class="chip draft">当前草稿</span><span class="muted"> 仍可继续修订，不是定本</span></div>';
+  const labels={};(st.passages||[]).forEach(p=>{labels[p.id]=p.label});
+  const cur={};(st.passages||[]).forEach(p=>{if(p.work_id===+wid)cur[p.id]=p.revision});
+  html+='<div style="margin-top:10px"><strong>段落时间线（定本截止修订 → 当前草稿修订）：</strong>';
+  const pids=new Set(list.editions.flatMap(e=>e.passages.map(p=>p.passage_id)).concat(Object.keys(cur).map(Number)));
+  if(!pids.size) html+='<div class="muted">该作品还没有段落</div>';
+  [...pids].sort((a,b)=>a-b).forEach(pid=>{
+    html+='<div class="eline">段落 '+pid+'「'+esc(labels[pid]||'')+'」：';
+    list.editions.forEach(e=>{
+      const f=e.passages.find(p=>p.passage_id===pid);
+      html+= f?('<span class="chip" style="cursor:default">第'+e.version_no+'版 @修订'+f.revision+'</span><span class="arrow">→</span>'):('<span class="muted">（第'+e.version_no+'版尚无此段）</span><span class="arrow">→</span>');
+    });
+    if(pid in cur){
+      const last=list.editions.length?list.editions[list.editions.length-1].passages.find(p=>p.passage_id===pid):null;
+      const d=last?cur[pid]-last.revision:null;
+      html+='<span class="chip draft">草稿 @修订'+cur[pid]+'</span>';
+      html+= d===null?'<span class="newtag"> 从未入定本</span>':(d>0?'<span class="newtag"> 最新定本之后又有 '+d+' 轮草稿修订</span>':'<span class="muted"> 与最新定本一致</span>');
+    } else html+='<span class="muted">段落已不在当前草稿</span>';
+    html+='</div>';
+  });
+  html+='</div>';
+  box.innerHTML=html;
+}
+state()</script></html>

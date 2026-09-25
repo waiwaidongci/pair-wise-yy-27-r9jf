@@ -144,6 +144,29 @@ class CollationDB:
               reason TEXT NOT NULL DEFAULT '',
               locked_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS final_editions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              work_id INTEGER NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+              version_no INTEGER NOT NULL,
+              description TEXT NOT NULL DEFAULT '',
+              alignment_count INTEGER NOT NULL,
+              variant_count INTEGER NOT NULL,
+              note_count INTEGER NOT NULL,
+              gap_count INTEGER NOT NULL,
+              content_json TEXT NOT NULL,
+              published_by INTEGER NOT NULL REFERENCES users(id),
+              published_at TEXT NOT NULL,
+              UNIQUE(work_id,version_no)
+            );
+            CREATE TABLE IF NOT EXISTS final_edition_passages (
+              edition_id INTEGER NOT NULL REFERENCES final_editions(id) ON DELETE CASCADE,
+              passage_id INTEGER NOT NULL REFERENCES passages(id) ON DELETE CASCADE,
+              revision INTEGER NOT NULL,
+              alignment_count INTEGER NOT NULL,
+              variant_count INTEGER NOT NULL,
+              note_count INTEGER NOT NULL,
+              PRIMARY KEY(edition_id,passage_id)
+            );
             """
         )
         self.conn.commit()
@@ -392,6 +415,34 @@ class CollationDB:
         if not self.can_view_work(work_id, user_id):
             raise DomainError("无权查看该校勘项目")
         work = self.conn.execute("SELECT * FROM works WHERE id=?", (work_id,)).fetchone()
+        collation = self._build_collation(work)
+        latest = self.conn.execute(
+            "SELECT id,version_no,published_at FROM final_editions WHERE work_id=? ORDER BY version_no DESC LIMIT 1",
+            (work_id,),
+        ).fetchone()
+        frozen_revisions = {}
+        if latest:
+            for row in self.conn.execute(
+                "SELECT passage_id,revision FROM final_edition_passages WHERE edition_id=?",
+                (latest["id"],),
+            ).fetchall():
+                frozen_revisions[row["passage_id"]] = row["revision"]
+        for passage in collation["passages"]:
+            frozen = frozen_revisions.get(passage["id"])
+            if frozen is not None:
+                passage["revision_at_final"] = frozen
+                passage["draft_revisions_since_final"] = passage["revision"] - frozen
+            else:
+                passage["revision_at_final"] = None
+                passage["draft_revisions_since_final"] = None
+        collation["latest_final_version"] = latest["version_no"] if latest else None
+        collation["latest_final_published_at"] = latest["published_at"] if latest else None
+        collation["is_draft"] = True
+        return collation
+
+    def _build_collation(self, work: sqlite3.Row) -> dict:
+        """Assemble the current draft: alignments, variants, notes and gaps."""
+        work_id = work["id"]
         witnesses = [dict(r) for r in self.conn.execute("SELECT * FROM witnesses WHERE work_id=? ORDER BY id", (work_id,))]
         passages = []
         gaps = 0
@@ -413,6 +464,123 @@ class CollationDB:
                 variants.append(variant)
             passages.append({**dict(passage), "alignments": alignments, "variants": variants})
         return {"work": dict(work), "witnesses": witnesses, "passages": passages, "gap_count": gaps}
+
+    def publish_final_edition(self, work_id: int, version_label: str, description: str, user_id: int) -> dict:
+        """Freeze the current draft into an immutable final edition (owner only)."""
+        work = self.conn.execute("SELECT * FROM works WHERE id=?", (work_id,)).fetchone()
+        if not work:
+            raise DomainError("作品不存在")
+        self._require_owner(work_id, user_id)
+        label = version_label.strip()
+        if label:
+            try:
+                proposed_no = int(label)
+            except ValueError as exc:
+                raise DomainError("版本号必须是正整数") from exc
+        else:
+            proposed_no = None
+        with self.transaction():
+            latest = self.conn.execute(
+                "SELECT * FROM final_editions WHERE work_id=? ORDER BY version_no DESC LIMIT 1",
+                (work_id,),
+            ).fetchone()
+            next_no = (int(latest["version_no"]) + 1) if latest else 1
+            if proposed_no is None:
+                proposed_no = next_no
+            elif proposed_no != next_no:
+                raise DomainError(f"版本号必须顺延为 {next_no}")
+            current = {
+                row["id"]: (
+                    row["revision"],
+                    self.conn.execute("SELECT COUNT(*) FROM alignments WHERE passage_id=?", (row["id"],)).fetchone()[0],
+                    self.conn.execute("SELECT COUNT(*) FROM variants WHERE passage_id=?", (row["id"],)).fetchone()[0],
+                    self.conn.execute(
+                        "SELECT COUNT(*) FROM notes n JOIN variants v ON v.id=n.variant_id WHERE v.passage_id=?",
+                        (row["id"],),
+                    ).fetchone()[0],
+                )
+                for row in self.conn.execute("SELECT id,revision FROM passages WHERE work_id=?", (work_id,)).fetchall()
+            }
+            if latest:
+                frozen = {
+                    row["passage_id"]: (row["revision"], row["alignment_count"], row["variant_count"], row["note_count"])
+                    for row in self.conn.execute(
+                        "SELECT * FROM final_edition_passages WHERE edition_id=?", (latest["id"],)
+                    ).fetchall()
+                }
+                if current == frozen:
+                    raise DomainError("自上一版定本以来没有新的段落修订，不能重复发布")
+            collation = self._build_collation(work)
+            counts = (
+                sum(len(p["alignments"]) for p in collation["passages"]),
+                sum(len(p["variants"]) for p in collation["passages"]),
+                sum(len(v["notes"]) for p in collation["passages"] for v in p["variants"]),
+                collation["gap_count"],
+            )
+            published_at = datetime.now().isoformat()
+            cur = self.conn.execute(
+                "INSERT INTO final_editions(work_id,version_no,description,alignment_count,variant_count,"
+                "note_count,gap_count,content_json,published_by,published_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (work_id, proposed_no, description.strip(), *counts,
+                 json.dumps(collation, ensure_ascii=False), user_id, published_at),
+            )
+            edition_id = int(cur.lastrowid)
+            self.conn.executemany(
+                "INSERT INTO final_edition_passages(edition_id,passage_id,revision,alignment_count,"
+                "variant_count,note_count) VALUES(?,?,?,?,?,?)",
+                [(edition_id, pid, *stats) for pid, stats in sorted(current.items())],
+            )
+        return self.get_final_edition(work_id, proposed_no, user_id)
+
+    def _edition_summary(self, row: sqlite3.Row) -> dict:
+        publisher = self.conn.execute("SELECT name FROM users WHERE id=?", (row["published_by"],)).fetchone()
+        return {
+            "version_no": row["version_no"],
+            "description": row["description"],
+            "alignment_count": row["alignment_count"],
+            "variant_count": row["variant_count"],
+            "note_count": row["note_count"],
+            "gap_count": row["gap_count"],
+            "published_by": row["published_by"],
+            "published_by_name": publisher["name"] if publisher else None,
+            "published_at": row["published_at"],
+            "read_only": True,
+        }
+
+    def list_final_editions(self, work_id: int, user_id: int) -> dict:
+        if not self.conn.execute("SELECT 1 FROM works WHERE id=?", (work_id,)).fetchone():
+            raise DomainError("作品不存在")
+        if not self.can_view_work(work_id, user_id):
+            raise DomainError("无权查看该校勘项目")
+        rows = self.conn.execute(
+            "SELECT * FROM final_editions WHERE work_id=? ORDER BY version_no", (work_id,)
+        ).fetchall()
+        editions = []
+        for row in rows:
+            item = self._edition_summary(row)
+            item["passages"] = [
+                {"passage_id": r["passage_id"], "revision": r["revision"],
+                 "alignment_count": r["alignment_count"], "variant_count": r["variant_count"],
+                 "note_count": r["note_count"]}
+                for r in self.conn.execute(
+                    "SELECT * FROM final_edition_passages WHERE edition_id=? ORDER BY passage_id", (row["id"],)
+                ).fetchall()
+            ]
+            editions.append(item)
+        return {"work_id": work_id, "editions": editions, "read_only": True}
+
+    def get_final_edition(self, work_id: int, version_no: int, user_id: int) -> dict:
+        if not self.can_view_work(work_id, user_id):
+            raise DomainError("无权查看该校勘项目")
+        row = self.conn.execute(
+            "SELECT * FROM final_editions WHERE work_id=? AND version_no=?", (work_id, version_no)
+        ).fetchone()
+        if not row:
+            raise DomainError("定本不存在")
+        summary = self._edition_summary(row)
+        summary["work_id"] = work_id
+        summary["content"] = json.loads(row["content_json"])
+        return summary
 
     def snapshot(self) -> dict:
         return {

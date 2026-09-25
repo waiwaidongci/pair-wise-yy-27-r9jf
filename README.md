@@ -19,6 +19,9 @@ python -m unittest discover -s tests -v
 - `[缺页]`、`[不可辨]`、`[残损]` 等标记会参与校勘稿导出和缺口统计，不匹配的方括号会拒绝保存。
 - 每次新增或修改异文都会产生递增修订号和 JSON 快照；提交必须携带 `expected_revision`，旧页面不能覆盖新层。
 - 锁定段落由负责人执行，锁定后任何新修订都会被拒绝。
+- 定本由负责人发布：把当前各段落修订冻结为只读定本，自动顺延版本号，并记录说明、发布人和当时的对齐、异文、注释及缺口数量。
+- 自上一版定本以来各段落（含对齐、异文、注释）没有任何变化时拒绝重复发布，避免旧内容被当成新定本；历史定本不可修改或删除。
+- 导出的校勘稿始终是当前草稿，会标注最近定本号，以及每个段落相对最近定本之后又有几轮草稿修订。
 
 ## 主要接口
 
@@ -30,5 +33,6 @@ python -m unittest discover -s tests -v
 - `GET /api/passages/{id}/snapshots/{revision}?user_id=...`
 - `POST /api/passages/{id}/lock`
 - `GET /api/works/{id}/collation?user_id=...`
+- `POST /api/works/{id}/editions`（发布定本，仅负责人）、`GET /api/works/{id}/editions?user_id=...`、`GET /api/works/{id}/editions/{version}?user_id=...`
 
-导出接口把版本对齐、异文、注释、残损缺口和锁定状态组合成可复核的校勘稿。
+导出接口把版本对齐、异文、注释、残损缺口和锁定状态组合成可复核的校勘稿；定本接口按版本号回看发布当时冻结的完整内容，页面上按"定本 → 草稿"展示各段落修订先后。
